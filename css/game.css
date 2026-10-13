@@ -92,18 +92,25 @@ button, input { font: inherit; color: inherit; }
   margin: 1px 0 0;
   font-size: 12px;
   color: rgba(251, 246, 238, 0.78);
+  white-space: nowrap;
 }
 
-.top-actions { display: flex; gap: 6px; }
+.view { display: contents; }
+
+.top-actions { display: flex; gap: 4px; flex: none; }
 
 .ghost, .text-btn {
   border: 1px solid rgba(240, 195, 106, 0.45);
   background: transparent;
   color: var(--gold);
   border-radius: 999px;
-  padding: 6px 10px;
+  padding: 6px 7px;
+  font-size: 13px;
   cursor: pointer;
+  white-space: nowrap;
 }
+
+.ghost.off { opacity: 0.5; text-decoration: line-through; }
 
 .ghost:hover, .text-btn:hover { background: rgba(240, 195, 106, 0.1); }
 
@@ -216,6 +223,63 @@ button, input { font: inherit; color: inherit; }
 
 .seat.thinking .who { color: var(--gold); }
 
+.seat .nick {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+[data-clock] { color: var(--gold); font-variant-numeric: tabular-nums; }
+
+.lobby {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: white;
+}
+
+.room-code { text-align: center; }
+.room-code span { display: block; font-size: 13px; opacity: 0.8; letter-spacing: 0.2em; }
+.room-code b { font-size: 52px; letter-spacing: 0.14em; color: var(--gold); font-variant-numeric: tabular-nums; }
+
+.seat-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: min(78%, 280px);
+  display: grid;
+  gap: 8px;
+}
+
+.seat-list li {
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.3);
+  font-size: 15px;
+}
+
+.seat-list li.empty { background: transparent; border: 1px dashed rgba(255, 255, 255, 0.35); opacity: 0.7; }
+
+.online label { display: block; margin: 10px 0; font-size: 13px; }
+
+.online input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 9px 12px;
+  border: 1px solid rgba(36, 20, 16, 0.25);
+  border-radius: 10px;
+  background: white;
+  font-size: 16px;
+}
+
+.online .note { min-height: 21px; color: var(--lacquer); }
+.dialog .row { flex-wrap: wrap; }
+
 .trick {
   position: absolute;
   inset: 156px 100px 40px;
@@ -240,6 +304,11 @@ button, input { font: inherit; color: inherit; }
   display: flex;
   justify-content: center;
   max-width: 210px;
+}
+
+/* Long plays squeeze together so they stay inside the table. */
+.play .cards .card:not(:first-child) {
+  margin-left: min(-18px, calc(168px / (var(--n) - 1) - 42px));
 }
 
 .pass-chip, .type-chip {
@@ -269,6 +338,8 @@ button, input { font: inherit; color: inherit; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+.status:empty { display: none; }
 
 .dock {
   flex-shrink: 0;
