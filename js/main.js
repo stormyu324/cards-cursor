@@ -94,7 +94,7 @@ function cardMarkup(card, interactive) {
   if (card.rank >= 16) {
     const big = card.rank === 17;
     classes.push("joker", big ? "big" : "small");
-    inner = `<span>${big ? "大王" : "小王"}</span>`;
+    inner = `<span class="corner"><b>${big ? "大" : "小"}</b><b>王</b></span>`;
   } else {
     const red = card.suit === "h" || card.suit === "d";
     classes.push(red ? "red" : "black");
@@ -189,15 +189,28 @@ function render() {
   `;
 
   const hand = app.querySelector(".hand");
-  if (hand) {
-    const cardsInHand = [...hand.querySelectorAll(".card")];
-    const slack = hand.clientWidth - overlap.w;
-    const gap = cardsInHand.length > 1 ? Math.min(overlap.w * 0.46, slack / (cardsInHand.length - 1)) : 0;
-    cardsInHand.forEach((el, index) => {
-      el.style.marginLeft = index === 0 ? "0" : `${gap - overlap.w}px`;
-    });
-  }
+  if (hand) layoutHand(hand);
   bind();
+}
+
+function layoutHand(hand) {
+  const cards = [...hand.querySelectorAll(".card")];
+  const count = cards.length;
+  if (count < 2) return;
+  const cardWidth = cards[0].offsetWidth;
+  const fit = () => {
+    const available = hand.clientWidth;
+    return Math.min(30, (available - cardWidth) / (count - 1));
+  };
+  const apply = (stride) => {
+    cards.forEach((el, index) => {
+      el.style.marginLeft = index === 0 ? "0px" : `${stride - cardWidth}px`;
+    });
+  };
+  apply(fit());
+  const overflow =
+    cards[count - 1].getBoundingClientRect().right - hand.getBoundingClientRect().right;
+  if (overflow > 0.5) apply(fit() - (overflow + 1) / (count - 1));
 }
 
 function handOverlap(count) {

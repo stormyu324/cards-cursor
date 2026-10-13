@@ -271,6 +271,7 @@ button, input { font: inherit; color: inherit; }
 }
 
 .dock {
+  flex-shrink: 0;
   background: linear-gradient(180deg, #3a1a1d, var(--dock));
   padding: 8px 8px 12px;
   border-top: 1px solid rgba(240, 195, 106, 0.2);
@@ -299,14 +300,20 @@ button, input { font: inherit; color: inherit; }
   margin-left: calc(var(--w) * -0.58);
   border: 0;
   border-radius: 6px;
-  padding: 4px 4px 6px;
+  padding: 2px 0 0 2px;
   appearance: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  text-align: left;
+  line-height: 1;
   background: linear-gradient(180deg, #fffdf8, var(--ivory) 40%, #f3e7d4);
   color: var(--ink);
   box-shadow: 0 2px 0 rgba(255, 255, 255, 0.7) inset, 0 6px 10px rgba(0, 0, 0, 0.28);
   position: relative;
   cursor: pointer;
   flex: none;
+  overflow: hidden;
   transition: transform 0.12s ease;
 }
 
@@ -321,13 +328,14 @@ button, input { font: inherit; color: inherit; }
 .card .corner {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
+  width: max-content;
   line-height: 1;
   font-weight: 750;
 }
 
-.card .corner b { font-size: 14px; font-style: normal; }
-.card .corner i { font-size: 12px; font-style: normal; }
+.card .corner b { font-size: 13px; font-style: normal; letter-spacing: -0.06em; }
+.card .corner i { font-size: 12px; font-style: normal; margin-top: 1px; }
 .card .pips {
   position: absolute;
   right: 6px;
@@ -337,11 +345,11 @@ button, input { font: inherit; color: inherit; }
 }
 
 .card.joker {
-  display: grid;
-  place-items: center;
-  writing-mode: horizontal-tb;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 2px 0 0 2px;
+  text-align: left;
   font-weight: 800;
-  letter-spacing: 0.12em;
 }
 
 .card.joker span { font-size: 15px; }
