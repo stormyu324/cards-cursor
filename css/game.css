@@ -448,6 +448,23 @@ button, input { font: inherit; color: inherit; }
   margin-top: 12px;
 }
 
+.reveal {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.reveal-row { margin-top: 6px; font-size: 13px; }
+
+.reveal .mini-cards {
+  flex-wrap: wrap;
+  row-gap: 4px;
+  margin-top: 4px;
+  padding-left: 18px;
+}
+
+.reveal .mini-cards .card:first-child { margin-left: -18px; }
+
 .rules { font-size: 13px; color: #3d2a24; }
 .rules li { margin: 4px 0; }
 
