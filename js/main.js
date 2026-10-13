@@ -12,10 +12,17 @@ import {
   SUIT_SYMBOL,
   TYPE_NAME,
 } from "./engine.js";
+import { connectRoom } from "./net.js";
 
 const HUMAN = 0;
 const app = document.querySelector("#app");
 const params = new URLSearchParams(location.search);
+// The table is redrawn wholesale; forms live in `modal` so typing survives a redraw.
+const view = document.createElement("div");
+view.className = "view";
+const modal = document.createElement("div");
+app.append(view, modal);
+const roomCode = /^\d{4}$/.test(params.get("room") || "") ? params.get("room") : null;
 
 let state = null;
 let selected = new Set();
@@ -29,6 +36,12 @@ let musicOn = loadPref("ddz-music");
 let audio = null;
 let musicBus = null;
 let noise = null;
+let net = null;
+let room = null;
+let link = "";
+let fatal = "";
+let lastSeq = null;
+let turnEnds = 0;
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -190,7 +203,7 @@ function musicTempo() {
 }
 
 function musicTick() {
-  const playing = musicOn && audio?.state === "running" && state.phase !== "over" && !document.hidden;
+  const playing = musicOn && audio?.state === "running" && state && state.phase !== "over" && !document.hidden;
   if (!playing) {
     music.next = 0;
     return;
@@ -249,7 +262,7 @@ function backCard() {
 function renderPile(entry) {
   if (!entry) return "";
   if (entry.kind === "pass") return `<div class="pass-chip">不出</div>`;
-  return `<div class="cards">${entry.cards.map((card) => cardMarkup(card, false)).join("")}</div><div class="type-chip">${TYPE_NAME[entry.type]}</div>`;
+  return `<div class="cards" style="--n:${Math.max(2, entry.cards.length)}">${entry.cards.map((card) => cardMarkup(card, false)).join("")}</div><div class="type-chip">${TYPE_NAME[entry.type]}</div>`;
 }
 
 function selectionCards() {
@@ -266,24 +279,26 @@ function selectionNote() {
 }
 
 function render() {
+  if (!state) {
+    renderLobby();
+    return;
+  }
   const bidding = state.phase === "bid";
   const myTurn = state.turn === HUMAN && state.phase !== "over";
   const landlordKnown = state.landlord >= 0;
   const overlap = handOverlap(state.hands[HUMAN].length);
 
-  app.innerHTML = `
+  view.innerHTML = `
     <header class="topbar">
       <div class="brand">
         <div class="seal">地主</div>
         <div>
           <h1>斗地主</h1>
-          <p>${landlordKnown ? `底分 ${state.base} · 倍数 ×${state.multiplier}` : "三人局 · 叫分"}</p>
+          <p>${subtitle(landlordKnown)}</p>
         </div>
       </div>
       <div class="top-actions">
-        <button type="button" class="ghost" data-action="music">${musicOn ? "音乐开" : "音乐关"}</button>
-        <button type="button" class="ghost" data-action="sound">${soundOn ? "音效开" : "音效关"}</button>
-        <button type="button" class="ghost" data-action="rules">规则</button>
+        ${topActions(true)}
       </div>
     </header>
     <div class="scoreline">
@@ -309,7 +324,7 @@ function render() {
         <div class="play">${renderPile(state.table[1])}</div>
         <div class="play mine">${renderPile(state.table[0])}</div>
       </div>
-      <div class="status">${toast || state.log[state.log.length - 1] || ""}</div>
+      <div class="status">${toast || linkNote() || state.log[state.log.length - 1] || ""}</div>
       ${flash ? `<div class="flash">${flash}</div>` : ""}
     </section>
     <footer class="dock">
@@ -328,6 +343,66 @@ function render() {
 
   const hand = app.querySelector(".hand");
   if (hand) layoutHand(hand);
+  bind();
+}
+
+function subtitle(landlordKnown) {
+  if (!roomCode) return landlordKnown ? `底分 ${state.base} · 倍数 ×${state.multiplier}` : "三人局 · 叫分";
+  return `房间 ${roomCode}${landlordKnown ? ` · ${state.base}分×${state.multiplier}` : ""}`;
+}
+
+function topActions(full) {
+  const toggle = (action, label, on) =>
+    `<button type="button" class="ghost ${on ? "" : "off"}" data-action="${action}" aria-pressed="${on}">${label}</button>`;
+  return `<button type="button" class="ghost" data-action="online">${roomCode ? "离开" : "联机"}</button>
+    ${toggle("music", "音乐", musicOn)}
+    ${toggle("sound", "音效", soundOn)}
+    ${full ? `<button type="button" class="ghost" data-action="rules">规则</button>` : ""}`;
+}
+
+function linkNote() {
+  if (!roomCode || link === "open") return "";
+  return link === "closed" ? "连接断开，正在重连…" : "正在连接…";
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
+}
+
+function renderLobby() {
+  const seats = room?.seats || [null, null, null];
+  const action = fatal
+    ? `<button type="button" class="btn primary" data-action="online">返回单机</button>`
+    : room?.host
+      ? `<div class="hint">人到齐后开始，空位由电脑补上</div><button type="button" class="btn primary" data-action="start">开始游戏</button>`
+      : `<div class="hint">${room ? "等待房主开始游戏" : ""}</div>`;
+  view.innerHTML = `
+    <header class="topbar">
+      <div class="brand">
+        <div class="seal">地主</div>
+        <div>
+          <h1>斗地主</h1>
+          <p>联机房间</p>
+        </div>
+      </div>
+      <div class="top-actions">${topActions(false)}</div>
+    </header>
+    <section class="felt lobby">
+      <div class="room-code"><span>房间号</span><b>${roomCode}</b></div>
+      <button type="button" class="btn" data-action="copy">复制邀请链接</button>
+      <ul class="seat-list">
+        ${seats
+          .map((seat) =>
+            seat
+              ? `<li>${escapeHtml(seat.name)}${seat.you ? "（你）" : ""}${seat.host ? " · 房主" : ""}</li>`
+              : `<li class="empty">空位</li>`,
+          )
+          .join("")}
+      </ul>
+      <div class="status">${fatal || toast || linkNote()}</div>
+    </section>
+    <footer class="dock"><div class="actions">${action}</div></footer>
+  `;
   bind();
 }
 
@@ -366,16 +441,19 @@ function seat(player, side) {
       ? ""
       : `<div class="role">${bid === 0 ? "不叫" : `${bid} 分`}</div>`;
   const thinking = state.turn === player && state.phase !== "over" ? " thinking" : "";
+  const sitter = room?.names?.[player];
+  const nick = !roomCode ? "" : !sitter ? "电脑" : `${escapeHtml(sitter.name)}${sitter.online ? "" : " · 托管"}`;
   return `<aside class="seat ${side}${thinking}">
     <div class="who">${seatName(player)}</div>
+    ${nick ? `<div class="nick">${nick}</div>` : ""}
     ${tag}
     <div class="backs" aria-hidden="true"><i></i><i></i><i></i></div>
-    <div class="count">${state.hands[player].length} 张</div>
+    <div class="count">${state.hands[player].length} 张${thinking ? ` <span data-clock></span>` : ""}</div>
   </aside>`;
 }
 
 function actions(bidding, myTurn) {
-  const note = `<div class="hint">${myTurn ? selectionNote() || "轮到你了" : "等待其他玩家"}</div>`;
+  const note = `<div class="hint">${myTurn ? `${bidding ? "轮到你叫分" : selectionNote() || "轮到你了"} <span data-clock></span>` : "等待其他玩家"}</div>`;
   if (!myTurn) return `${note}<button type="button" class="btn" disabled>请稍候</button>`;
   if (bidding) {
     return `${note}${[0, 1, 2, 3]
@@ -407,7 +485,7 @@ function rulesDialog() {
         <li>地主先出。先出完牌的一方获胜。春天、反春天再翻一倍。</li>
       </ul>
       <div class="row">
-        <button type="button" class="btn" data-action="again">重开本局</button>
+        ${roomCode ? "" : `<button type="button" class="btn" data-action="again">重开本局</button>`}
         <button type="button" class="btn primary" data-action="close-rules">知道了</button>
       </div>
     </div>
@@ -436,7 +514,7 @@ function resultDialog() {
         ${[2, 1].map(revealHand).join("")}
       </div>
       <div class="row">
-        <button type="button" class="btn" data-action="reset-score">积分清零</button>
+        ${roomCode ? "" : `<button type="button" class="btn" data-action="reset-score">积分清零</button>`}
         <button type="button" class="btn primary" data-action="again">再来一局</button>
       </div>
     </div>
@@ -485,7 +563,26 @@ function bind() {
     render();
   });
   app.querySelectorAll("[data-action='again']").forEach((el) => {
-    el.addEventListener("click", () => restart(state.scores));
+    el.addEventListener("click", () => (roomCode ? net?.send({ t: "again" }) : restart(state.scores)));
+  });
+  app.querySelector("[data-action='online']")?.addEventListener("click", () => {
+    if (!roomCode) {
+      openOnlineDialog();
+      return;
+    }
+    net?.send({ t: "leave" });
+    net?.close();
+    location.search = "";
+  });
+  app.querySelector("[data-action='start']")?.addEventListener("click", () => net?.send({ t: "start" }));
+  app.querySelector("[data-action='copy']")?.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(location.href);
+      toast = "邀请链接已复制，发给朋友即可";
+    } catch {
+      toast = `复制失败，请把房间号 ${roomCode} 告诉朋友`;
+    }
+    render();
   });
   app.querySelector("[data-action='reset-score']")?.addEventListener("click", () => {
     restart([0, 0, 0]);
@@ -515,6 +612,10 @@ function toggle(id) {
 
 function humanBid(bid) {
   if (busy || state.phase !== "bid" || state.turn !== HUMAN) return;
+  if (roomCode) {
+    net?.send({ t: "bid", bid });
+    return;
+  }
   const res = applyBid(state, HUMAN, bid, makeRng());
   if (!res.ok) {
     toast = res.error;
@@ -529,6 +630,10 @@ function humanBid(bid) {
 function humanPlay(forced) {
   if (busy || state.phase !== "play" || state.turn !== HUMAN) return;
   const cards = forced === null ? null : selectionCards();
+  if (roomCode) {
+    net?.send(cards ? { t: "play", ids: cards.map((card) => card.id) } : { t: "pass" });
+    return;
+  }
   const res = applyPlay(state, HUMAN, cards);
   if (!res.ok) {
     toast = res.error;
@@ -538,7 +643,7 @@ function humanPlay(forced) {
   selected = new Set();
   toast = "";
   state = res.state;
-  noteBoom(res.state);
+  noteAction(state.table[HUMAN]);
   if (state.phase === "over") saveScores();
   proceed();
 }
@@ -556,22 +661,21 @@ function hint() {
   render();
 }
 
-function noteBoom(next) {
-  const last = next.log[next.log.length - 1] || "";
+function noteAction(entry) {
   flash = "";
   app.classList.remove("shake");
-  if (last.includes("王炸")) {
+  if (entry.type === "rocket") {
     flash = "王炸";
     app.classList.add("shake");
     tone(140, 0.5, 0, "sawtooth");
     tone(70, 0.6, 0.05, "sawtooth");
     say("王炸");
-  } else if (last.includes("炸弹")) {
+  } else if (entry.type === "bomb") {
     flash = "炸弹";
     app.classList.add("shake");
     tone(180, 0.35, 0, "sawtooth");
     say("炸弹");
-  } else if (last.includes("不出")) passSound();
+  } else if (entry.kind === "pass") passSound();
   else {
     snap();
     tone(520, 0.07);
@@ -593,14 +697,14 @@ async function proceed() {
         state = res.state;
         bidSound(bid);
       } else {
-        const choice = aiChoose(state, state.turn);
-        const res = applyPlay(state, state.turn, choice);
+        const actor = state.turn;
+        const res = applyPlay(state, actor, aiChoose(state, actor));
         if (!res.ok) {
           toast = res.error;
           break;
         }
         state = res.state;
-        noteBoom(state);
+        noteAction(state.table[actor]);
       }
       render();
     }
@@ -619,9 +723,163 @@ async function proceed() {
   }
 }
 
+function stored(key) {
+  try {
+    return localStorage.getItem(key) || "";
+  } catch {
+    return "";
+  }
+}
+
+function store(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* private mode can reject storage */
+  }
+}
+
+function playerId() {
+  let pid = stored("ddz-pid");
+  if (!pid) {
+    pid = crypto.randomUUID();
+    store("ddz-pid", pid);
+  }
+  return pid;
+}
+
+function openOnlineDialog(joining = "") {
+  modal.innerHTML = `<div class="overlay">
+    <form class="dialog online">
+      <h2>${joining ? `加入房间 ${joining}` : "联机对战"}</h2>
+      <p>${joining ? "起个昵称，让牌友认得你。" : "创建房间后把链接发给朋友；人不够时空位由电脑补上。"}</p>
+      <label>昵称<input name="nick" maxlength="8" autocomplete="off" value="${escapeHtml(stored("ddz-name"))}" placeholder="最多 8 个字" /></label>
+      ${joining ? "" : `<label>房间号<input name="code" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="加入朋友的房间时填写" /></label>`}
+      <p class="note" role="alert"></p>
+      <div class="row">
+        <button type="button" class="btn" data-go="cancel">取消</button>
+        ${
+          joining
+            ? `<button type="submit" class="btn primary" data-go="enter">进入房间</button>`
+            : `<button type="button" class="btn" data-go="join">加入房间</button>
+               <button type="submit" class="btn primary" data-go="create">创建房间</button>`
+        }
+      </div>
+    </form>
+  </div>`;
+  const form = modal.querySelector("form");
+  const note = form.querySelector(".note");
+  const keepName = () => store("ddz-name", form.nick.value.trim() || "玩家");
+  const go = {
+    cancel() {
+      modal.innerHTML = "";
+      if (joining) location.search = "";
+    },
+    enter() {
+      keepName();
+      modal.innerHTML = "";
+      startOnline();
+    },
+    join() {
+      const code = form.code.value.trim();
+      if (!/^\d{4}$/.test(code)) {
+        note.textContent = "房间号是 4 位数字";
+        return;
+      }
+      keepName();
+      location.search = `?room=${code}`;
+    },
+    async create() {
+      keepName();
+      note.textContent = "正在创建房间…";
+      try {
+        const res = await fetch(new URL("api/create", location.href), { method: "POST" });
+        const data = await res.json();
+        if (!data.code) throw new Error(data.error || "create failed");
+        location.search = `?room=${data.code}`;
+      } catch {
+        note.textContent = "联机服务暂时连不上，请稍后再试";
+      }
+    },
+  };
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    go[joining ? "enter" : "create"]();
+  });
+  form.querySelectorAll("button[type='button']").forEach((el) => {
+    el.addEventListener("click", () => go[el.dataset.go]());
+  });
+}
+
+function onRoomState(msg) {
+  room = msg;
+  state = msg.game;
+  fatal = "";
+  toast = "";
+  const mine = new Set(state ? state.hands[HUMAN].map((card) => card.id) : []);
+  selected = new Set([...selected].filter((id) => mine.has(id)));
+  turnEnds = msg.turnLeft === null ? 0 : performance.now() + msg.turnLeft;
+
+  const event = msg.event;
+  const fresh = event && lastSeq !== null && event.seq !== lastSeq;
+  lastSeq = event ? event.seq : 0;
+  if (fresh) {
+    if (event.kind === "deal") for (let i = 0; i < 6; i += 1) snap(i * 0.07);
+    else if (event.kind === "bid") bidSound(event.bid);
+    else noteAction(event);
+    if (state.phase === "over") jingle(humanWon());
+    if (flash) {
+      setTimeout(() => {
+        flash = "";
+        app.classList.remove("shake");
+        render();
+      }, 680);
+    }
+  }
+  render();
+}
+
+function startOnline() {
+  const url = new URL(`api/room/${roomCode}/ws`, location.href);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  net = connectRoom(
+    url,
+    { pid: playerId(), name: stored("ddz-name") },
+    {
+      state: onRoomState,
+      status(next) {
+        link = next;
+        render();
+      },
+      error(message, isFatal) {
+        if (isFatal) {
+          fatal = message;
+          state = null;
+        } else toast = message;
+        render();
+      },
+    },
+  );
+}
+
+function tickClocks() {
+  const left = turnEnds ? Math.max(0, Math.ceil((turnEnds - performance.now()) / 1000)) : null;
+  app.querySelectorAll("[data-clock]").forEach((el) => {
+    el.textContent = left === null ? "" : `${left}s`;
+  });
+}
+
 document.addEventListener("pointerdown", unlockAudio, true);
 document.addEventListener("keydown", unlockAudio, true);
 setInterval(musicTick, 100);
+setInterval(tickClocks, 250);
 
-newGame();
-proceed();
+if (!roomCode) {
+  newGame();
+  proceed();
+} else if (stored("ddz-name")) {
+  startOnline();
+} else {
+  render();
+  openOnlineDialog(roomCode);
+}
