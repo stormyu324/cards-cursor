@@ -24,8 +24,11 @@ let turnToken = 0;
 let toast = "";
 let flash = "";
 let showRules = false;
-let soundOn = loadSound();
+let soundOn = loadPref("ddz-sound");
+let musicOn = loadPref("ddz-music");
 let audio = null;
+let musicBus = null;
+let noise = null;
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -69,17 +72,17 @@ function newGame(scores = loadScores()) {
   });
 }
 
-function loadSound() {
+function loadPref(key) {
   try {
-    return localStorage.getItem("ddz-sound") !== "off";
+    return localStorage.getItem(key) !== "off";
   } catch {
     return true;
   }
 }
 
-function saveSound() {
+function savePref(key, on) {
   try {
-    localStorage.setItem("ddz-sound", soundOn ? "on" : "off");
+    localStorage.setItem(key, on ? "on" : "off");
   } catch {
     /* private mode can reject storage */
   }
@@ -90,24 +93,120 @@ function saveSound() {
 function unlockAudio() {
   const Ctx = window.AudioContext || window.webkitAudioContext;
   if (!Ctx) return;
-  if (!audio) audio = new Ctx();
+  if (!audio) {
+    audio = new Ctx();
+    musicBus = audio.createGain();
+    musicBus.gain.value = musicOn ? 1 : 0;
+    musicBus.connect(audio.destination);
+  }
   if (audio.state === "suspended") audio.resume();
 }
 
-function tone(freq, dur = 0.08, delay = 0) {
-  if (!soundOn || !audio) return;
-  const start = audio.currentTime + delay;
+function pluck(freq, start, dur, vol, type, dest) {
   const osc = audio.createOscillator();
   const gain = audio.createGain();
-  osc.type = "triangle";
+  osc.type = type;
   osc.frequency.value = freq;
   gain.gain.setValueAtTime(0.0001, start);
-  gain.gain.exponentialRampToValueAtTime(0.22, start + 0.012);
+  gain.gain.exponentialRampToValueAtTime(vol, start + 0.012);
   gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
   osc.connect(gain);
-  gain.connect(audio.destination);
+  gain.connect(dest);
   osc.start(start);
   osc.stop(start + dur + 0.02);
+}
+
+function tone(freq, dur = 0.08, delay = 0, type = "triangle") {
+  if (!soundOn || !audio) return;
+  pluck(freq, audio.currentTime + delay, dur, 0.22, type, audio.destination);
+}
+
+// A short burst of filtered noise that reads as a card hitting the table.
+function snap(delay = 0) {
+  if (!soundOn || !audio) return;
+  if (!noise) {
+    noise = audio.createBuffer(1, audio.sampleRate * 0.1, audio.sampleRate);
+    const data = noise.getChannelData(0);
+    for (let i = 0; i < data.length; i += 1) data[i] = Math.random() * 2 - 1;
+  }
+  const start = audio.currentTime + delay;
+  const src = audio.createBufferSource();
+  const filter = audio.createBiquadFilter();
+  const gain = audio.createGain();
+  src.buffer = noise;
+  filter.type = "bandpass";
+  filter.frequency.value = 1800;
+  gain.gain.setValueAtTime(0.3, start);
+  gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.07);
+  src.connect(filter);
+  filter.connect(gain);
+  gain.connect(audio.destination);
+  src.start(start);
+  src.stop(start + 0.09);
+}
+
+function say(text) {
+  if (!soundOn || !audio || typeof speechSynthesis === "undefined") return;
+  const line = new SpeechSynthesisUtterance(text);
+  line.lang = "zh-CN";
+  line.rate = 1.25;
+  line.volume = 0.9;
+  speechSynthesis.cancel();
+  speechSynthesis.speak(line);
+}
+
+function passSound() {
+  tone(330, 0.16, 0, "sine");
+  tone(233, 0.26, 0.13, "sine");
+  say(PASS_LINES[Math.floor(Math.random() * PASS_LINES.length)]);
+}
+
+function bidSound(bid) {
+  tone(bid === 0 ? 280 : 440 + bid * 60, 0.1);
+  say(BID_LINES[bid]);
+}
+
+const PASS_LINES = ["不要", "要不起", "过"];
+const BID_LINES = ["不叫", "一分", "两分", "三分"];
+
+// Background music: an eight-bar pentatonic loop, eight steps to the bar.
+const MELODY = [
+  659, 0, 784, 880, 784, 0, 659, 587,
+  523, 0, 587, 659, 587, 0, 523, 440,
+  392, 0, 440, 523, 587, 0, 659, 784,
+  659, 0, 587, 0, 523, 0, 0, 0,
+  880, 0, 784, 659, 784, 0, 880, 1047,
+  880, 0, 784, 659, 587, 0, 659, 784,
+  659, 0, 587, 523, 440, 0, 523, 587,
+  523, 0, 0, 0, 392, 0, 0, 0,
+];
+const BASS = [131, 110, 131, 98, 110, 131, 110, 131];
+const music = { step: 0, next: 0 };
+
+function musicTempo() {
+  if (state.phase === "bid") return 92;
+  const fewest = Math.min(...state.hands.map((hand) => hand.length));
+  return fewest <= 3 ? 136 : 108;
+}
+
+function musicTick() {
+  const playing = musicOn && audio?.state === "running" && state.phase !== "over" && !document.hidden;
+  if (!playing) {
+    music.next = 0;
+    return;
+  }
+  if (music.next < audio.currentTime) music.next = audio.currentTime + 0.05;
+  const stepDur = 30 / musicTempo();
+  while (music.next < audio.currentTime + 0.3) {
+    const freq = MELODY[music.step];
+    if (freq) pluck(freq, music.next, stepDur * 2.4, 0.07, "triangle", musicBus);
+    if (music.step % 4 === 0) {
+      const root = BASS[Math.floor(music.step / 8)];
+      pluck(music.step % 8 === 0 ? root : root * 1.5, music.next, stepDur * 3, 0.09, "sine", musicBus);
+    }
+    music.next += stepDur;
+    music.step = (music.step + 1) % MELODY.length;
+  }
 }
 
 function jingle(win) {
@@ -182,7 +281,8 @@ function render() {
         </div>
       </div>
       <div class="top-actions">
-        <button type="button" class="ghost" data-action="sound">${soundOn ? "声音开" : "声音关"}</button>
+        <button type="button" class="ghost" data-action="music">${musicOn ? "音乐开" : "音乐关"}</button>
+        <button type="button" class="ghost" data-action="sound">${soundOn ? "音效开" : "音效关"}</button>
         <button type="button" class="ghost" data-action="rules">规则</button>
       </div>
     </header>
@@ -373,8 +473,15 @@ function bind() {
   });
   app.querySelector("[data-action='sound']")?.addEventListener("click", () => {
     soundOn = !soundOn;
-    saveSound();
+    savePref("ddz-sound", soundOn);
+    if (!soundOn && typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
     tone(520, 0.06);
+    render();
+  });
+  app.querySelector("[data-action='music']")?.addEventListener("click", () => {
+    musicOn = !musicOn;
+    savePref("ddz-music", musicOn);
+    if (musicBus) musicBus.gain.value = musicOn ? 1 : 0;
     render();
   });
   app.querySelectorAll("[data-action='again']").forEach((el) => {
@@ -393,6 +500,7 @@ function restart(scores) {
   flash = "";
   app.classList.remove("shake");
   newGame(scores);
+  for (let i = 0; i < 6; i += 1) snap(i * 0.07);
   proceed();
 }
 
@@ -414,7 +522,7 @@ function humanBid(bid) {
     return;
   }
   state = res.state;
-  tone(bid === 0 ? 280 : 440);
+  bidSound(bid);
   proceed();
 }
 
@@ -455,13 +563,19 @@ function noteBoom(next) {
   if (last.includes("王炸")) {
     flash = "王炸";
     app.classList.add("shake");
-    tone(140, 0.28);
+    tone(140, 0.5, 0, "sawtooth");
+    tone(70, 0.6, 0.05, "sawtooth");
+    say("王炸");
   } else if (last.includes("炸弹")) {
     flash = "炸弹";
     app.classList.add("shake");
-    tone(180, 0.2);
-  } else if (last.includes("不出")) tone(300, 0.05);
-  else tone(520, 0.07);
+    tone(180, 0.35, 0, "sawtooth");
+    say("炸弹");
+  } else if (last.includes("不出")) passSound();
+  else {
+    snap();
+    tone(520, 0.07);
+  }
 }
 
 async function proceed() {
@@ -477,6 +591,7 @@ async function proceed() {
         const bid = aiBid(state.hands[state.turn], state.bidMax);
         const res = applyBid(state, state.turn, bid, makeRng());
         state = res.state;
+        bidSound(bid);
       } else {
         const choice = aiChoose(state, state.turn);
         const res = applyPlay(state, state.turn, choice);
@@ -506,6 +621,7 @@ async function proceed() {
 
 document.addEventListener("pointerdown", unlockAudio, true);
 document.addEventListener("keydown", unlockAudio, true);
+setInterval(musicTick, 100);
 
 newGame();
 proceed();
