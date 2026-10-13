@@ -24,8 +24,8 @@ let turnToken = 0;
 let toast = "";
 let flash = "";
 let showRules = false;
-let soundOn = false;
-const audio = typeof AudioContext !== "undefined" ? new AudioContext() : null;
+let soundOn = loadSound();
+let audio = null;
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -69,16 +69,54 @@ function newGame(scores = loadScores()) {
   });
 }
 
-function tone(freq, dur = 0.08) {
+function loadSound() {
+  try {
+    return localStorage.getItem("ddz-sound") !== "off";
+  } catch {
+    return true;
+  }
+}
+
+function saveSound() {
+  try {
+    localStorage.setItem("ddz-sound", soundOn ? "on" : "off");
+  } catch {
+    /* private mode can reject storage */
+  }
+}
+
+// Browsers only let audio start from a user gesture, so the context is
+// created and resumed on the first tap instead of at page load.
+function unlockAudio() {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  if (!audio) audio = new Ctx();
+  if (audio.state === "suspended") audio.resume();
+}
+
+function tone(freq, dur = 0.08, delay = 0) {
   if (!soundOn || !audio) return;
+  const start = audio.currentTime + delay;
   const osc = audio.createOscillator();
   const gain = audio.createGain();
+  osc.type = "triangle";
   osc.frequency.value = freq;
-  gain.gain.value = 0.04;
+  gain.gain.setValueAtTime(0.0001, start);
+  gain.gain.exponentialRampToValueAtTime(0.22, start + 0.012);
+  gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
   osc.connect(gain);
   gain.connect(audio.destination);
-  osc.start();
-  osc.stop(audio.currentTime + dur);
+  osc.start(start);
+  osc.stop(start + dur + 0.02);
+}
+
+function jingle(win) {
+  const notes = win ? [523, 659, 784, 1047] : [392, 330, 262];
+  notes.forEach((freq, i) => tone(freq, win ? 0.2 : 0.3, i * (win ? 0.13 : 0.22)));
+}
+
+function humanWon() {
+  return (state.winner === state.landlord) === (state.landlord === HUMAN);
 }
 
 function cardMarkup(card, interactive) {
@@ -277,9 +315,8 @@ function rulesDialog() {
 }
 
 function resultDialog() {
-  const humanLandlord = state.landlord === HUMAN;
   const landlordWin = state.winner === state.landlord;
-  const humanWin = humanLandlord ? landlordWin : !landlordWin;
+  const humanWin = humanWon();
   const detail = [
     `底分 ${state.base}`,
     `倍数 ×${state.multiplier}`,
@@ -295,11 +332,24 @@ function resultDialog() {
       <div class="score-jump">${state.roundScore[HUMAN] > 0 ? "+" : ""}${state.roundScore[HUMAN]}</div>
       <p>${detail}</p>
       <p>总分　你 ${state.scores[0]}　下家 ${state.scores[1]}　上家 ${state.scores[2]}</p>
+      <div class="reveal">
+        ${[2, 1].map(revealHand).join("")}
+      </div>
       <div class="row">
         <button type="button" class="btn" data-action="reset-score">积分清零</button>
         <button type="button" class="btn primary" data-action="again">再来一局</button>
       </div>
     </div>
+  </div>`;
+}
+
+function revealHand(player) {
+  const hand = state.hands[player];
+  const title = `${seatName(player)}（${roleName(state, player)}）`;
+  if (!hand.length) return `<div class="reveal-row"><span>${title} 出完了</span></div>`;
+  return `<div class="reveal-row">
+    <span>${title} 剩 ${hand.length} 张</span>
+    <div class="mini-cards">${hand.map((card) => cardMarkup(card, false)).join("")}</div>
   </div>`;
 }
 
@@ -321,9 +371,9 @@ function bind() {
     showRules = false;
     render();
   });
-  app.querySelector("[data-action='sound']")?.addEventListener("click", async () => {
+  app.querySelector("[data-action='sound']")?.addEventListener("click", () => {
     soundOn = !soundOn;
-    if (soundOn && audio?.state === "suspended") await audio.resume();
+    saveSound();
     tone(520, 0.06);
     render();
   });
@@ -351,6 +401,7 @@ function toggle(id) {
   if (selected.has(id)) selected.delete(id);
   else selected.add(id);
   toast = "";
+  tone(selected.has(id) ? 660 : 440, 0.04);
   render();
 }
 
@@ -439,7 +490,10 @@ async function proceed() {
       render();
     }
     if (mine !== turnToken) return;
-    if (state.phase === "over") saveScores();
+    if (state.phase === "over") {
+      saveScores();
+      jingle(humanWon());
+    }
     if (flash) await wait(680);
   } finally {
     if (mine !== turnToken) return;
@@ -449,6 +503,9 @@ async function proceed() {
     render();
   }
 }
+
+document.addEventListener("pointerdown", unlockAudio, true);
+document.addEventListener("keydown", unlockAudio, true);
 
 newGame();
 proceed();
