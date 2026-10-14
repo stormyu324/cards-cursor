@@ -232,6 +232,27 @@ button, input { font: inherit; color: inherit; }
 }
 
 [data-clock] { color: var(--gold); font-variant-numeric: tabular-nums; }
+[data-clock].low { color: #ffb15a; font-weight: 700; }
+[data-clock].critical {
+  color: #ff5d5d;
+  font-weight: 800;
+  display: inline-block;
+  animation: clock-pulse 0.45s ease-in-out infinite;
+}
+
+.time-hint {
+  display: block;
+  min-height: 1.2em;
+  font-weight: 700;
+}
+
+.phone.time-low .time-hint { color: #ffb15a; }
+.phone.time-critical .time-hint { color: #ff6b6b; font-size: 15px; }
+.phone.time-critical .dock { box-shadow: inset 0 0 0 2px rgba(255, 80, 80, 0.9); }
+
+@keyframes clock-pulse {
+  50% { transform: scale(1.2); }
+}
 
 .lobby {
   display: flex;
