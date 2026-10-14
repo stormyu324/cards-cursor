@@ -169,9 +169,22 @@ function say(text) {
 }
 
 function passSound() {
-  tone(330, 0.16, 0, "sine");
-  tone(233, 0.26, 0.13, "sine");
-  say(PASS_LINES[Math.floor(Math.random() * PASS_LINES.length)]);
+  tone(392, 0.1, 0, "sine");
+  tone(262, 0.16, 0.09, "sine");
+  tone(196, 0.22, 0.2, "triangle");
+  say("不要");
+}
+
+function playSound(entry) {
+  snap();
+  snap(0.07);
+  tone(523, 0.07, 0.02);
+  tone(784, 0.12, 0.09);
+  say(TYPE_NAME[entry.type] || "出牌");
+}
+
+function tickSound(critical) {
+  tone(critical ? 988 : 740, critical ? 0.09 : 0.045, 0, "square");
 }
 
 function bidSound(bid) {
@@ -179,7 +192,6 @@ function bidSound(bid) {
   say(BID_LINES[bid]);
 }
 
-const PASS_LINES = ["不要", "要不起", "过"];
 const BID_LINES = ["不叫", "一分", "两分", "三分"];
 
 // Background music: an eight-bar pentatonic loop, eight steps to the bar.
@@ -453,7 +465,8 @@ function seat(player, side) {
 }
 
 function actions(bidding, myTurn) {
-  const note = `<div class="hint">${myTurn ? `${bidding ? "轮到你叫分" : selectionNote() || "轮到你了"} <span data-clock></span>` : "等待其他玩家"}</div>`;
+  const clock = `<span data-clock="mine"></span><span class="time-hint" data-time-hint></span>`;
+  const note = `<div class="hint">${myTurn ? `${bidding ? "轮到你叫分" : selectionNote() || "轮到你了"} ${clock}` : "等待其他玩家"}</div>`;
   if (!myTurn) return `${note}<button type="button" class="btn" disabled>请稍候</button>`;
   if (bidding) {
     return `${note}${[0, 1, 2, 3]
@@ -676,10 +689,7 @@ function noteAction(entry) {
     tone(180, 0.35, 0, "sawtooth");
     say("炸弹");
   } else if (entry.kind === "pass") passSound();
-  else {
-    snap();
-    tone(520, 0.07);
-  }
+  else playSound(entry);
 }
 
 async function proceed() {
@@ -862,11 +872,49 @@ function startOnline() {
   );
 }
 
+let clockWatch = 0;
+let urged = false;
+let hurried = false;
+let clockSecond = null;
+
 function tickClocks() {
   const left = turnEnds ? Math.max(0, Math.ceil((turnEnds - performance.now()) / 1000)) : null;
+  if (turnEnds !== clockWatch) {
+    clockWatch = turnEnds;
+    urged = false;
+    hurried = false;
+    clockSecond = null;
+  }
+  const mine = Boolean(state && state.phase !== "over" && state.turn === HUMAN && left !== null);
+  const low = mine && left <= 10;
+  const critical = mine && left <= 5;
+  app.classList.toggle("time-low", low);
+  app.classList.toggle("time-critical", critical);
   app.querySelectorAll("[data-clock]").forEach((el) => {
+    const own = el.dataset.clock === "mine";
     el.textContent = left === null ? "" : `${left}s`;
+    el.classList.toggle("low", own ? low : left !== null && left <= 10);
+    el.classList.toggle("critical", own ? critical : left !== null && left <= 5);
   });
+  const hint = app.querySelector("[data-time-hint]");
+  if (hint) {
+    if (!mine) hint.textContent = "";
+    else if (critical) hint.textContent = "时间不多了，快出牌";
+    else if (low) hint.textContent = "还剩不到 10 秒";
+    else hint.textContent = `还剩 ${left} 秒`;
+  }
+  if (mine && left !== null && left !== clockSecond) {
+    if (left > 0 && left <= 10) tickSound(critical);
+    if (left <= 10 && !urged) {
+      urged = true;
+      if (left > 5) say("时间不多了");
+    }
+    if (left <= 5 && left > 0 && !hurried) {
+      hurried = true;
+      say("快点出牌");
+    }
+  }
+  clockSecond = left;
 }
 
 document.addEventListener("pointerdown", unlockAudio, true);
